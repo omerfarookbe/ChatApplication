@@ -1,0 +1,109 @@
+﻿@page "/register"
+@using System.Text.Json
+@inject HttpClient httpClient
+@inject NavigationManager navigationManager
+@inject IJSRuntime JsRuntime
+
+<PageTitle>Blazing Chat - Register</PageTitle>
+
+<div class="container">
+    <div class="row">
+        <div class="col-4"></div>
+        <div class="col-4">
+            <EditForm Model="RegisterModel" OnValidSubmit="RegisterAsync">
+                <div class="card text-center br-0 mt-5">
+                    <div class="card-header bg-main text-white">
+                        <h2>Blazing Chat</h2>
+                    </div>
+                    <div class="card-body">
+                        <DataAnnotationsValidator />
+                        @if (!string.IsNullOrWhiteSpace(error_message))
+                        {
+                            <p class="text-danger">@error_message</p>
+                        }
+                        <div class="mb-3">
+                            <InputText @bind-Value="RegisterModel.Name" DisplayName="Name" class="form-control" placeholder="Enter Name"></InputText>
+                            <ValidationMessage For="() => RegisterModel.Name"></ValidationMessage>
+                        </div>
+                        <div class="mb-3">
+                            <InputText @bind-Value="RegisterModel.Username" DisplayName="Username" class="form-control" placeholder="Enter Username"></InputText>
+                            <ValidationMessage For="() => RegisterModel.Username"></ValidationMessage>
+                        </div>
+                        <div class="mb-3">
+                            <InputText type="password" @bind-Value="RegisterModel.Password" DisplayName="Password" class="form-control" placeholder="Enter Password"></InputText>
+                            <ValidationMessage For="() => RegisterModel.Password"></ValidationMessage>
+                        </div>
+                    </div>
+                    <div class="card-footer text-muted">
+                        <div class="mb-3">
+                            @if (_isBusy)
+                            {
+                                <button class="btn btn-success" type="button" disabled>
+                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    Loading...
+                                </button>
+                            }
+                            else
+                            {
+                                <button type="submit" class="btn btn-success float-start">Register</button>
+                            }
+                            <NavLink href="/" class="btn btn-outline-primary float-end">Login</NavLink>
+                        </div>
+                    </div>
+
+                </div>
+            </EditForm>
+        </div>
+        <div class="col-4"></div>
+    </div>
+</div>
+
+@code {
+
+    [CascadingParameter(Name = "AuthenticationState")]
+    public AuthenticationState authenticationState { get; set; }
+
+    private RegisterDto RegisterModel { get; set; } = new();
+    private bool _isBusy = false;
+    private string? error_message = null;
+
+    private async Task RegisterAsync()
+    {
+        try
+        {
+            _isBusy = true;
+            var response = await httpClient.PostAsJsonAsync<RegisterDto>("api/account/register", RegisterModel);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var authResult = JsonConvertor.Deserialize<AuthResponseDto>(content);
+                
+                var serialized = JsonConvertor.Serialize(authResult);
+                await JsRuntime.InvokeVoidAsync("window.setToStorage", AuthenticationState.AuthStoreKey, serialized);
+                
+                authenticationState.LoadState(authResult);
+            }
+            else
+            {
+                string? error_content = null;
+                try
+                {
+                    error_content = await response.Content.ReadAsStringAsync();
+                }
+                catch
+                {
+                }
+                if (string.IsNullOrWhiteSpace(error_content))
+                    error_content = $"Error {response.StatusCode} - {response.ReasonPhrase}";
+
+                error_message = error_content;
+                _isBusy = false;
+            }
+        }
+        catch
+        {
+            _isBusy = false;
+        }
+    }
+
+} 

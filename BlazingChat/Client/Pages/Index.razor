@@ -1,0 +1,107 @@
+﻿@page "/"
+@using System.Text.Json
+@inject HttpClient httpClient
+@inject NavigationManager navigationManager
+@inject IJSRuntime JsRuntime
+
+<PageTitle>Blazing Chat - Login</PageTitle>
+
+<div class="container">
+    <div class="row">
+        <div class="col-4"></div>
+        <div class="col-4">
+            <EditForm Model="LoginModel" OnValidSubmit="LoginAsync">
+                <div class="card text-center br-0 mt-5">
+                    <div class="card-header bg-main text-white">
+                        <h2>Blazing Chat</h2>
+                    </div>
+                    <div class="card-body">
+                        <DataAnnotationsValidator />
+                        @if (!string.IsNullOrWhiteSpace(error_message))
+                        {
+                            <p class="text-danger">@error_message</p>
+                        }
+                        <div class="mb-3">
+                            <InputText @bind-Value="LoginModel.Username" DisplayName="Username" class="form-control" placeholder="Enter Username"></InputText>
+                            <ValidationMessage For="() => LoginModel.Username"></ValidationMessage>
+                        </div>
+                        <div class="mb-3">
+                            <InputText type="password" @bind-Value="LoginModel.Password" DisplayName="Password" class="form-control" placeholder="Enter Password"></InputText>
+                            <ValidationMessage For="() => LoginModel.Password"></ValidationMessage>
+                        </div>
+                    </div>
+                    <div class="card-footer text-muted">
+                        <div class="mb-3">
+                            <NavLink href="register" class="btn btn-outline-primary float-start">Register</NavLink>
+                            @if (_isBusy)
+                            {
+                                <button class="btn btn-success float-end" type="button" disabled>
+                                    <span class="spinner-border spinner-border-sm" role="status" aria-hidden="true"></span>
+                                    Loading...
+                                </button>
+                            }
+                            else
+                            {
+                                <button type="submit" class="btn btn-success float-end">Login</button>
+                            }
+                        </div>
+                    </div>
+
+                </div>
+            </EditForm>
+        </div>
+        <div class="col-4"></div>
+    </div>
+</div>
+
+@code {
+
+    [CascadingParameter(Name = "AuthenticationState")]
+    public AuthenticationState AuthenticationState { get; set; }
+
+    private LoginDto LoginModel { get; set; } = new();
+    private bool _isBusy = false;
+    private string? error_message = null;
+
+    private async Task LoginAsync()
+    {
+        try
+        {
+            _isBusy = true;
+            error_message = null;
+            var response = await httpClient.PostAsJsonAsync<LoginDto>("api/account/login", LoginModel);
+            if (response.IsSuccessStatusCode)
+            {
+                var content = await response.Content.ReadAsStringAsync();
+                var authResult = JsonConvertor.Deserialize<AuthResponseDto>(content);
+
+                var serialized = JsonConvertor.Serialize(authResult);
+                await JsRuntime.InvokeVoidAsync("window.setToStorage", AuthenticationState.AuthStoreKey, serialized);
+
+                AuthenticationState.LoadState(authResult);
+                //navigationManager.NavigateTo("/chat");
+            }
+            else
+            {
+                string? error_content = null;
+                try
+                {
+                    error_content = await response.Content.ReadAsStringAsync();
+                }
+                catch
+                {
+                }
+                if (string.IsNullOrWhiteSpace(error_content))
+                    error_content = $"Error {response.StatusCode} - {response.ReasonPhrase}";
+
+                error_message = error_content;
+                _isBusy = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            _isBusy = false;
+        }
+    }
+
+} 

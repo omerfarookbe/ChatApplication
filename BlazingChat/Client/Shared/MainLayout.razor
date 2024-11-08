@@ -1,0 +1,58 @@
+﻿@using System.Text.Json;
+@using System.ComponentModel
+@implements IDisposable
+
+@inject NavigationManager navigationManager
+@inject IJSRuntime JsRuntime
+@inherits LayoutComponentBase
+
+<script src="app.js"></script>
+
+<CascadingValue Value="AuthenticationState" Name="AuthenticationState">
+    <div class="container-fluid">
+        @Body
+    </div>
+</CascadingValue>
+
+@code {
+    public AuthenticationState AuthenticationState { get; set; } = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        var authStateJson = await JsRuntime.InvokeAsync<string>("getFromStorage", AuthenticationState.AuthStoreKey);
+        if (!string.IsNullOrWhiteSpace(authStateJson))
+        {
+            var authState = JsonConvertor.Deserialize<AuthResponseDto>(authStateJson);
+            AuthenticationState.LoadState(authState);
+
+            if (AuthenticationState.IsAuthenticated)
+            {
+                navigationManager.NavigateTo("/chat");
+            }
+        }
+
+        AuthenticationState.PropertyChanged += AuthenticationStateChanged;
+
+    }
+
+    private void AuthenticationStateChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if(e.PropertyName == nameof(AuthenticationState.IsAuthenticated))
+        {
+            if (AuthenticationState.IsAuthenticated)
+            {
+                navigationManager.NavigateTo("/chat");
+            }
+            else
+            {
+                navigationManager.NavigateTo("/");
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        AuthenticationState.PropertyChanged -= AuthenticationStateChanged;    
+    }
+
+}

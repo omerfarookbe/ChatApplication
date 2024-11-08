@@ -1,0 +1,157 @@
+﻿@inject HttpClient httpClient
+
+@if (SelectedUser is null)
+{
+    <h2>Please select user to start the conversation</h2>
+}
+else
+{
+    <div class="flex-grow-1 d-flex flex-column">
+        <div class="header d-flex justify-content-between bg-main text-white">
+            <h2 class="text-white">@SelectedUser.Name</h2>
+            <button class="btn btn-danger btn-sm" @onclick="HandleCancelClick">X</button>
+        </div>
+        <div class="messages-list" style="height:500px">
+            @if (!string.IsNullOrWhiteSpace(errorMessage))
+            {
+                <div class="header d-flex justify-content-between bg-danger text-white">
+                    <span class="text-white">@errorMessage</span>
+                    <button class="btn btn-danger btn-sm" @onclick="() => errorMessage= null">X</button>
+                </div>
+            }
+            <ul style="padding:5px">
+                @foreach (var msg in messages)
+                {
+                    var incoming = msg.ToUserId == currentUserId;
+
+                    var cls = $"justify-content-{(incoming ? "start" : "end")}";
+
+                    <li class="d-flex @cls">
+                        <p class="single-msg @(incoming ? "other" : "me")">
+                            @msg.message
+                            <br />
+                            <small class="msg-dt" >
+                                @if (msg.SentOn.Date == DateTime.Today.Date)
+                                {
+                                    <span>Today, @msg.SentOn.ToShortTimeString()</span>
+                                }
+                                else
+                                {
+                                    <span>@msg.SentOn.ToLongDateString() @msg.SentOn.ToShortTimeString()</span>
+                                }
+                                </small>
+                        </p>
+                    </li>
+                }
+            </ul>
+        </div>
+        <div class="message-input">
+            <EditForm Model="newMessage" OnValidSubmit="HandleSendMessageSubmit">
+                <div class="">
+                    <div class="input-group">
+                        <InputText @bind-Value="newMessage" placeholder="Enter message here..." class="form-control float-start"></InputText>
+                        <button type="submit" class="btn btn-success float-end">Send</button>
+                    </div>
+                </div>
+            </EditForm>
+        </div>
+    </div>
+}
+@code {
+
+    [CascadingParameter(Name = "AuthenticationState")]
+    public AuthenticationState AuthenticationState { get; set; }
+
+    [Parameter]
+    public UserDto? SelectedUser { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> OnCancel { get; set; }
+
+    [Parameter]
+    public EventCallback<bool> OnIComingMessageReceived { get; set; }
+
+    private IList<MessageDto> messages = new List<MessageDto>();
+
+    private string newMessage = string.Empty;
+
+    [Parameter]
+    public MessageDto? newIncomingMessage { get; set; }
+
+    private string? errorMessage = string.Empty;
+
+    private int previousSelectUserId = 0;
+
+    private int currentUserId => AuthenticationState?.User.Id ?? 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (SelectedUser is not null)
+            await LoadMessagesAsync();
+    }
+
+    private async Task LoadMessagesAsync()
+    {
+        messages.Clear();
+        var _messages = await GetClient().GetFromJsonAsync<IEnumerable<MessageDto>>($"api/messages/{SelectedUser.Id}", JsonConvertor.JsonSerializerOptions);
+        if (_messages?.Any() == true)
+        {
+            messages = _messages.ToList();
+            errorMessage = string.Empty;
+        }
+        else
+        {
+            errorMessage = $"There is no message between you and {SelectedUser.Name}";
+        }
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (newIncomingMessage is not null)
+        {
+            messages.Add(newIncomingMessage);
+            await OnIComingMessageReceived.InvokeAsync();
+        }
+        if (SelectedUser is not null && SelectedUser.Id != previousSelectUserId)
+        {
+            previousSelectUserId = SelectedUser.Id;
+            await LoadMessagesAsync();
+        }
+    }
+
+    private async Task HandleCancelClick()
+    {
+        var isUserHasMessages = messages.Any();
+
+        var shouldRemoveFromChatList = !isUserHasMessages;
+
+        await OnCancel.InvokeAsync(shouldRemoveFromChatList);
+    }
+
+    private async Task HandleSendMessageSubmit()
+    {
+        if (!string.IsNullOrWhiteSpace(newMessage))
+        {
+            var sendmessageDto = new MessageSendDto(SelectedUser!.Id, newMessage);
+            var response = await GetClient().PostAsJsonAsync("api/messages/send", sendmessageDto, JsonConvertor.JsonSerializerOptions);
+            if (response.IsSuccessStatusCode)
+            {
+                var _messageDto = new MessageDto(SelectedUser!.Id, AuthenticationState.User.Id, newMessage, DateTime.Now);
+                messages.Add(_messageDto);
+                newMessage = string.Empty;
+                errorMessage = string.Empty;
+            }
+            else
+            {
+                errorMessage = "Error sending message";
+            }
+        }
+    }
+
+    private HttpClient GetClient()
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AuthenticationState.Token);
+        return httpClient;
+    }
+
+}

@@ -1,0 +1,218 @@
+﻿@page "/chat"
+@using Microsoft.AspNetCore.SignalR.Client
+@using System.IdentityModel.Tokens.Jwt
+@inject NavigationManager navigationManager
+@inject IJSRuntime JsRuntime
+@inject HttpClient httpClient
+@implements IAsyncDisposable
+
+<div class="container-fluid">
+    <div class="card br-0 mt-5">
+        <div class="card-header bg-main br-0 text-white">
+            <div class="row">
+                <div class="col">
+                    <h2>Blazing Chat</h2>
+                </div>
+                <div class="col">
+                    <button class="btn btn-danger float-end" @onclick="Logout">Logout</button>
+                    @if (AuthenticationState.User is not null)
+                    {
+                        <label class="float-end me-2 mt-2 topbar-name">Welcome, @AuthenticationState.User.Name</label>
+                    }
+
+                </div>
+            </div>
+        </div>
+        <div class="card-body messages-window bg-light d-flex" style="height:600px">
+            <div class="row" style="flex:1 ">
+                <div class="col-sm-2 col-3">
+                    <ChatsList _loading="_loadingUser" Chats="Chats" OnUserSelected="OnUserSelected"></ChatsList>
+                </div>
+                <div class="col-sm-8 col-6 d-flex px-0">
+                    <ChatDetails SelectedUser="selectedUser"
+                                 OnIComingMessageReceived="() => newIncomingMessage = null"
+                                 OnCancel="HandleChatDetailCancel"
+                                 newIncomingMessage="@newIncomingMessage"></ChatDetails>
+                </div>
+                <div class="col-sm-2 col-3">
+                    <UsersList _loading="_loadingUser" Users="Users" OnUserSelected="OnUserSelected"></UsersList>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+
+    [CascadingParameter(Name = "AuthenticationState")]
+    public AuthenticationState AuthenticationState { get; set; }
+
+    [Parameter]
+    public UserDto newUser { get; set; } = default;
+
+    public ICollection<UserDto> Users { get; set; } = new HashSet<UserDto>();
+    public IList<UserDto> Chats { get; set; } = new List<UserDto>();
+
+    private MessageDto? newIncomingMessage = null;
+
+    private UserDto? selectedUser = null;
+
+    private HubConnection? hubConnection;
+
+    public bool _loadingUser = false;
+
+    private async Task<bool> IsTokenExpiredAsync()
+    {
+        var jwt = new JwtSecurityToken(AuthenticationState.Token);
+        if (jwt.ValidTo <= DateTime.Now)
+        {
+            await Logout();
+            return true;
+        }
+        return false;
+    }
+
+    protected override async void OnInitialized()
+    {
+
+
+        base.OnInitialized();
+        if (!AuthenticationState.IsAuthenticated)
+        {
+            navigationManager.NavigateTo("/");
+        }
+        else
+        {
+            if (!await IsTokenExpiredAsync())
+            {
+                hubConnection = ConfigureHubConnection();
+
+                _loadingUser = true;
+
+                var userListTask = GetClient().GetFromJsonAsync<ICollection<UserDto>>("api/user", JsonConvertor.JsonSerializerOptions);
+                var chatListTask = GetClient().GetFromJsonAsync<IList<UserDto>>("api/user/chats", JsonConvertor.JsonSerializerOptions);
+
+                await hubConnection.StartAsync();
+
+                var userlist = await userListTask;
+                if (userlist is not null)
+                    Users = userlist;
+
+                var chatlist = await chatListTask;
+                if (chatlist is not null)
+                    Chats = chatlist;
+
+                _loadingUser = false;
+
+                await hubConnection.SendAsync(nameof(IBlazingChatHubServer.SetUserOnline), AuthenticationState.User);
+                StateHasChanged();
+            }
+        }
+    }
+
+    private HttpClient GetClient()
+    {
+        httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", AuthenticationState.Token);
+        return httpClient;
+    }
+
+    private HubConnection ConfigureHubConnection()
+    {
+        var _hubConnection = new HubConnectionBuilder()
+            .WithUrl(navigationManager.ToAbsoluteUri("/hubs/blazing-chat"),
+                     options => options.AccessTokenProvider = () => Task.FromResult(AuthenticationState.Token))
+            .Build();
+
+        _hubConnection.On<UserDto>(nameof(IBlazingChatHubClient.UserConnected), (newUser) =>
+        {
+            Users.Add(newUser);
+            StateHasChanged();
+        });
+
+        _hubConnection.On<ICollection<UserDto>>(nameof(IBlazingChatHubClient.OnlineUsersList), (OnlineUsers) =>
+        {
+            foreach (var item in Users)
+            {
+                if (OnlineUsers.Any(u => u.Id == item.Id))
+                {
+                    item.IsOnline = true;
+                }
+            }
+            StateHasChanged();
+        });
+
+        _hubConnection.On<int>(nameof(IBlazingChatHubClient.UserIsOnline), (userId) =>
+        {
+            var u = Users.FirstOrDefault(u => u.Id == userId);
+            if (u is not null)
+            {
+                u.IsOnline = true;
+                StateHasChanged();
+            }
+        });
+
+        _hubConnection.On<MessageDto>(nameof(IBlazingChatHubClient.MessageReceived), (messageDto) =>
+        {
+            var fromUser = Users.FirstOrDefault(u => u.Id == messageDto.FromUserId);
+
+            if (!Chats.Any(c => c.Id == messageDto.FromUserId))
+            {
+                Chats.Insert(0, fromUser!);
+                //Chats.Prepend(fromUser);
+            }
+            else
+            {
+                if (selectedUser?.Id == messageDto.FromUserId)
+                {
+                    newIncomingMessage = messageDto;
+                }
+            }
+            StateHasChanged();
+        });
+
+        return _hubConnection;
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection != null)
+            await hubConnection.DisposeAsync();
+    }
+
+    private async Task OnUserSelected(UserDto user)
+    {
+        selectedUser = user;
+
+        foreach (var chat in Chats)
+        {
+            chat.IsSelected = false;
+        }
+        var selectedchatUser = Chats.FirstOrDefault(c => c.IsSelected);
+        if (selectedchatUser is not null)
+            selectedchatUser.IsSelected = false;
+
+        var chatUser = Chats.FirstOrDefault(c => c.Id == user.Id);
+        if (chatUser is null)
+        {
+            user.IsSelected = true;
+            Chats.Add(user);
+        }
+        else
+        {
+            user.IsSelected = true;
+        }
+    }
+
+    private async Task HandleChatDetailCancel(bool shouldRemoveFromChatList)
+    {
+        if (shouldRemoveFromChatList)
+            Chats.Remove(selectedUser);
+        selectedUser = null;
+    }
+
+    private async Task Logout()
+    {
+        await JsRuntime.InvokeVoidAsync("window.removeFromStorage", AuthenticationState.AuthStoreKey);
+        AuthenticationState.UnLoadState();
+    }
+}
